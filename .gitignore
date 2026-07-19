@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+coverage/
+
+# env — secrets live here and ONLY here (CLAUDE.md rule 4)
+.env
+.env.*
+!.env.example
+
+*.tsbuildinfo
+next-env.d.ts
