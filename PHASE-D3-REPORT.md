@@ -75,19 +75,52 @@ sha256-identical to the deno-clinic original) + deno-clinic `docs/12-DESKTOP-PHA
    clean on immediate retry and stable since; standalone `tsc`/`eslint` are the gates that
    matter and pass. Cosmetic, but noted.
 
-## Questions for the owner
+## Questions for the owner — RESOLVED (review round 2)
 
-1. **Subscription `expires_at` passing** — the protocol defines SUSPENDED as an explicit admin
-   action and doesn't say heartbeats should auto-degrade when the DB `expires_at` date passes.
-   Currently expiry is informational (Ahmed suspends manually on non-payment). If you want
-   auto-suspend-on-expiry, that's a small change to the heartbeat handler — but it changes §7
-   semantics (an auto-suspension would apply without grace), so it needs your explicit call.
-2. Deploy target (Vercel? other) — affects nothing in this phase but determines where env
-   secrets get pasted for production.
+1. **Natural expiry** — owner ruled 2026-07-19: natural expiry ≠ manual suspension. Implemented
+   as the computed **`EXPIRED_GRACE`** signal (see round-2 section below); protocol updated
+   (docs/11 §7.1 in this repo).
+2. **Deploy target** — owner: not decided; nothing deploy-specific built. Env secrets stay
+   platform-agnostic (`.env.example`).
+
+## Review round 2 — natural expiry vs manual suspension (owner contract, implemented exactly)
+
+**Where:** `src/lib/license-status.ts` (`effectiveStatus`) — the ONLY derivation point, called by
+the heartbeat handler; `docs/11-LICENSE-PROTOCOL.md` gained §7.1 (plus a §4 cross-reference) so
+the protocol fully describes the behavior — nothing exists only in code.
+
+**Contract compliance:**
+- `EXPIRED_GRACE` is **computed at heartbeat time** (`expires_at` set AND `< now`) and is NOT a
+  stored status — `licensed_clinics.status` keeps exactly `ACTIVE`/`SUSPENDED` (the DB CHECK
+  constraint is unchanged, and test (b) asserts the stored status remains `ACTIVE` while the
+  heartbeat reports `EXPIRED_GRACE`).
+- Manual Suspend always overrides: `effectiveStatus` checks stored `SUSPENDED` FIRST — an owner
+  suspension during an expiry grace window yields `SUSPENDED`, never `EXPIRED_GRACE`.
+- Renewal = extending `expires_at` in the admin UI; no new mechanism.
+
+**Evidence — all four required tests, run through the real route handlers with the admin route
+driven exactly as the UI drives it (session cookie + form POST), 23/23 green:**
+- (a) manual suspend → next heartbeat token `status: "SUSPENDED"` (never `EXPIRED_GRACE`).
+- (b) natural expiry (admin sets `expires_at` to 2020-01-01) → next heartbeat token
+  `status: "EXPIRED_GRACE"`, and the token **verifies against the exported public key** (the
+  same check a Clinic Server build performs) — authentically signed. Stored DB status: still
+  `ACTIVE`.
+- (c) owner extends `expires_at` during grace → next heartbeat back to `ACTIVE`.
+- (d) expired AND owner suspends during the grace window → `SUSPENDED` wins immediately; bonus
+  assertion: reactivating while still expired returns `EXPIRED_GRACE` (not `ACTIVE`) — the
+  grace path resumes, it doesn't get forgotten.
+- Derivation unit checks: `expires_at NULL` → never `EXPIRED_GRACE`; boundary before/after
+  `now`; stored `SUSPENDED` + past expiry → `SUSPENDED`.
+
+**D4 note (for the deno-clinic side, once the owner carries §7.1 over):** the Clinic Server must
+map `EXPIRED_GRACE` onto the SAME §5 grace flow as connectivity loss (banner + 7-day window →
+soft lock per §6), and treat `SUSPENDED` as immediate soft lock — `verifyToken` already accepts
+all three status values.
 
 ## Checks
 
-`next build` ✓ (11 routes) · `tsc --noEmit` ✓ · `eslint .` ✓ (0 warnings) · vitest **18/18**
+`next build` ✓ (11 routes) · `tsc --noEmit` ✓ · `eslint .` ✓ (0 warnings) · vitest **23/23**
+(18 round-1 + the 5 §7.1 round-2 tests above)
 (unit: keys/tokens/rate-limit/session · protocol: activation, one-key-one-install, heartbeat
 freshness, admin-driven suspend/reactivate, tampered-token 401, wrong-fingerprint 403,
 unauthenticated-admin rejection, 429 rate limit, schema review, raw-key-never-stored) ·

@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { createHash } from "crypto";
 import { POST as activate } from "@/app/api/activate/route";
 import { POST as heartbeat } from "@/app/api/heartbeat/route";
+import { effectiveStatus } from "@/lib/license-status";
+import { publicKeyB64 } from "@/lib/tokens";
 import { POST as adminClinicAction } from "@/app/api/admin/clinics/[id]/route";
 import { createClinic, getClinic } from "@/lib/clinics";
 import { verifyToken, TOKEN_TTL_MS } from "@/lib/tokens";
@@ -177,6 +179,82 @@ describe("heartbeat + suspension (docs/11 §4/§7)", () => {
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toContain("/admin/login");
     expect((await getClinic(clinic.id))!.status).toBe("ACTIVE"); // unchanged
+  });
+});
+
+describe("natural expiry vs manual suspension (docs/11 §7.1, owner decision 2026-07-19)", () => {
+  async function activatedWithExpiry(expiresAt: Date | null) {
+    const { clinic, licenseKey } = await createClinic({
+      name: "عيادة التجربة",
+      contact: "",
+      plan: "standard",
+      expiresAt,
+    });
+    const res = await post(activate, { license_key: licenseKey, fingerprint: FP_A });
+    expect(res.status).toBe(200);
+    const { token } = (await res.json()) as { token: string };
+    return { clinic, token };
+  }
+
+  async function heartbeatStatus(token: string): Promise<string> {
+    const res = await post(heartbeat, { token, fingerprint: FP_A });
+    expect(res.status).toBe(200);
+    const fresh = ((await res.json()) as { token: string }).token;
+    // (b) requirement: the token must verify as AUTHENTICALLY SIGNED — checked
+    // against the exported public key (exactly what a Clinic Server build does)
+    const payload = verifyToken(fresh, publicKeyB64());
+    expect(payload).not.toBeNull();
+    return payload!.status;
+  }
+
+  it("(a) manual suspend → SUSPENDED on next heartbeat (immediate-lock semantics, never EXPIRED_GRACE)", async () => {
+    const { clinic, token } = await activatedWithExpiry(new Date(Date.now() + 30 * 86_400_000));
+    await adminPost(clinic.id, { action: "suspend" });
+    expect(await heartbeatStatus(token)).toBe("SUSPENDED");
+  });
+
+  it("(b) natural expiry → EXPIRED_GRACE on next heartbeat, token authentically signed; DB status column UNCHANGED", async () => {
+    const { clinic, token } = await activatedWithExpiry(new Date(Date.now() + 30 * 86_400_000));
+    expect(await heartbeatStatus(token)).toBe("ACTIVE"); // before expiry
+
+    // the owner-facing renewal/expiry lever: the admin route's expires_at update
+    await adminPost(clinic.id, { action: "update", expires_at: "2020-01-01" });
+    expect(await heartbeatStatus(token)).toBe("EXPIRED_GRACE");
+
+    // computed signal only — the stored status stays ACTIVE (exactly two DB values)
+    expect((await getClinic(clinic.id))!.status).toBe("ACTIVE");
+  });
+
+  it("(c) owner extends expires_at during grace → next heartbeat back to ACTIVE (renewal = no new mechanism)", async () => {
+    const { clinic, token } = await activatedWithExpiry(new Date("2020-01-01"));
+    expect(await heartbeatStatus(token)).toBe("EXPIRED_GRACE");
+    const nextYear = new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10);
+    await adminPost(clinic.id, { action: "update", expires_at: nextYear });
+    expect(await heartbeatStatus(token)).toBe("ACTIVE");
+  });
+
+  it("(d) expired AND manually suspended during the grace window → SUSPENDED wins immediately", async () => {
+    const { clinic, token } = await activatedWithExpiry(new Date("2020-01-01"));
+    expect(await heartbeatStatus(token)).toBe("EXPIRED_GRACE"); // in grace
+    await adminPost(clinic.id, { action: "suspend" }); // owner acts during grace
+    expect(await heartbeatStatus(token)).toBe("SUSPENDED");
+    // and reactivating while still expired returns to EXPIRED_GRACE, not ACTIVE
+    await adminPost(clinic.id, { action: "reactivate" });
+    expect(await heartbeatStatus(token)).toBe("EXPIRED_GRACE");
+  });
+
+  it("derivation unit checks: no expiry set → never EXPIRED_GRACE; boundary respects now", () => {
+    const now = new Date("2026-07-19T12:00:00Z");
+    expect(effectiveStatus({ status: "ACTIVE", expires_at: null }, now)).toBe("ACTIVE");
+    expect(
+      effectiveStatus({ status: "ACTIVE", expires_at: new Date("2026-07-19T11:59:59Z") }, now),
+    ).toBe("EXPIRED_GRACE");
+    expect(
+      effectiveStatus({ status: "ACTIVE", expires_at: new Date("2026-07-19T12:00:01Z") }, now),
+    ).toBe("ACTIVE");
+    expect(
+      effectiveStatus({ status: "SUSPENDED", expires_at: new Date("2020-01-01") }, now),
+    ).toBe("SUSPENDED"); // manual always overrides
   });
 });
 

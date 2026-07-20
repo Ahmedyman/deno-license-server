@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getClinic, touchLastSeen } from "@/lib/clinics";
+import { effectiveStatus } from "@/lib/license-status";
 import { issueToken, verifyToken } from "@/lib/tokens";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
@@ -15,6 +16,9 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
  * a clinic recovers from an outage; grace/lock policy is enforced client-side
  * per §5/§6, and the fresh token carries the authoritative status anyway.
  */
+
+// effective-status derivation (ACTIVE / SUSPENDED / computed EXPIRED_GRACE)
+// lives in src/lib/license-status.ts — docs/11 §7.1
 
 const Body = z.object({
   token: z.string().min(1).max(4096),
@@ -47,5 +51,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   await touchLastSeen(clinic.id);
-  return Response.json({ token: issueToken(clinic) });
+  return Response.json({
+    token: issueToken({ id: clinic.id, plan: clinic.plan, status: effectiveStatus(clinic) }),
+  });
 }

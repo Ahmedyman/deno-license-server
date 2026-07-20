@@ -17,12 +17,19 @@ import { createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 
 
 export const TOKEN_TTL_MS = 25 * 60 * 60 * 1000; // 25h, per docs/11 §4 — do not tune
 
+/**
+ * ACTIVE / SUSPENDED mirror the stored clinic status. EXPIRED_GRACE is a
+ * COMPUTED signal (docs/11 §7.1): derived at heartbeat time from
+ * expires_at < now — never stored in licensed_clinics.status.
+ */
+export type TokenStatus = "ACTIVE" | "SUSPENDED" | "EXPIRED_GRACE";
+
 export interface TokenPayload {
   clinic_id: string;
   plan: string;
   issued_at: string; // ISO-8601 UTC
   expires_at: string; // ISO-8601 UTC, always issued_at + 25h
-  status: "ACTIVE" | "SUSPENDED";
+  status: TokenStatus;
 }
 
 function privateKey(): KeyObject {
@@ -44,7 +51,7 @@ export function publicKeyB64(): string {
 }
 
 export function issueToken(
-  clinic: { id: string; plan: string; status: "ACTIVE" | "SUSPENDED" },
+  clinic: { id: string; plan: string; status: TokenStatus },
   now: Date = new Date(),
 ): string {
   const payload: TokenPayload = {
@@ -79,7 +86,7 @@ export function verifyToken(token: string, publicKeyDerB64?: string): TokenPaylo
       typeof payload.clinic_id !== "string" ||
       typeof payload.issued_at !== "string" ||
       typeof payload.expires_at !== "string" ||
-      (payload.status !== "ACTIVE" && payload.status !== "SUSPENDED")
+      !["ACTIVE", "SUSPENDED", "EXPIRED_GRACE"].includes(payload.status)
     ) {
       return null;
     }
