@@ -36,7 +36,8 @@ folder.
 ```
 Clinic Server → POST /heartbeat { token, fingerprint }
 License Server: verify signature (defense in depth, key is authoritative from DB) → check status
-  → issue a FRESH token (new issued_at/expires_at) or a status-changed token (SUSPENDED)
+  → issue a FRESH token (new issued_at/expires_at) or a status-changed token
+    (SUSPENDED, or the computed EXPIRED_GRACE — see §7.1)
 ← 200 { token }  |  network/DNS failure → Clinic Server keeps using the last valid cached token
 ```
 `expires_at` on every issued token is always **now + 25h** (1h slack over the 24h heartbeat
@@ -67,6 +68,25 @@ Suspension (Ahmed marked the clinic inactive on purpose, e.g., non-payment) appl
 receive that heartbeat, so "we couldn't reach the server" doesn't apply. Grace exists only to
 protect a paying, well-behaved clinic from losing function over a router outage — not to soften
 an intentional suspension.
+
+### 7.1 Natural expiry (added 2026-07-19, owner decision) — NOT the same as suspension
+Natural expiry — the clinic's subscription `expires_at` passing with **no manual action** — must
+NOT behave like a manual suspension. It triggers the SAME 7-day grace mechanism already
+specified for connectivity loss (§5): the clinic keeps full operation for 7 days before any lock.
+
+- **Signal:** the heartbeat response's token `status` field carries the distinct value
+  **`EXPIRED_GRACE`**. It is **computed at heartbeat time** by comparing the stored
+  `licensed_clinics.expires_at` to the current time (`expires_at` set AND `expires_at < now`).
+  It is **not** a third stored status — `licensed_clinics.status` keeps exactly its two values
+  (`ACTIVE` / `SUSPENDED`).
+- **Precedence:** manual Suspend always overrides and skips the grace. If the owner suspends —
+  including during an expiry grace window — the next heartbeat carries `SUSPENDED`
+  (immediate-lock semantics per §7), never `EXPIRED_GRACE`.
+- **Clinic-side handling:** on receiving `EXPIRED_GRACE`, the Clinic Server enters the §5 grace
+  flow (same banner, same 7-day window measured per §5); after the window with no ACTIVE
+  heartbeat, soft lock per §6. `SUSPENDED` remains an immediate soft lock on receipt.
+- **Renewal:** the owner extending `expires_at` in the admin UI — no new mechanism. The next
+  heartbeat after renewal carries `ACTIVE` again and any grace/lock lifts per §6.
 
 ## 8. What the License Server NEVER receives
 `license_key` (hash only after first activation), `fingerprint`, `clinic_name` (display only,
