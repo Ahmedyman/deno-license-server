@@ -5,9 +5,10 @@
 
 ## State (2026-07-19)
 
-- **Phase D3 built and evidence-complete** on `feat/d3-license-server` → **PR #1 against
-  `main`, awaiting the owner's merge** (never merge it yourself). `main` = docs-only bootstrap.
-- Two review rounds passed:
+- **Phase D3 COMPLETE and MERGED** — PR #1 merged into `main` 2026-07-19 on the owner's explicit
+  instruction (merge commit `f8d5a95`); branch `feat/d3-license-server` deleted. `main` is now
+  the full D3 implementation. No open PRs, no open branches.
+- Two review rounds passed before merge:
   1. Core D3 (activate/heartbeat/admin UI/rate limiting/hash-only storage; schema-review +
      raw-key-never-stored acceptance tests).
   2. **Natural expiry vs manual suspension** (owner decision, now protocol §7.1): heartbeats
@@ -26,9 +27,12 @@
 
 ## Next
 
-- Owner merges PR #1, then carries the §7.1 protocol addition into deno-clinic's
-  `docs/11-LICENSE-PROTOCOL.md` **himself** (explicitly not this repo's job — never touch
-  deno-clinic from here).
+- ~~Owner merges PR #1~~ DONE (2026-07-19).
+- Owner carries the §7.1 protocol addition into deno-clinic's `docs/11-LICENSE-PROTOCOL.md`
+  **himself** (explicitly not this repo's job — never touch deno-clinic from here). Still open.
+- Owner deploy prep, still open: real Neon env values into `.env.local`/hosting env, run
+  `keys:generate` + `admin:hash-password` (mind `\$` escaping), `db:migrate` against Neon;
+  deploy target still deliberately undecided.
 - Phase D4 (licensing integration) happens in the deno-clinic repo, on the owner's go-ahead,
   after both docs are aligned. D4 must map `EXPIRED_GRACE` → §5 grace flow, `SUSPENDED` →
   immediate soft lock; token format documented in `src/lib/tokens.ts`.
